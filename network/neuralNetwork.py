@@ -3,6 +3,8 @@ import torch
 from typing import Any, Tuple, Callable
 from sys import stdout
 
+from torch.utils.data import dataloader
+
 class NeuralNetwork(nn.Module):
   """
   This class implements a simple interface to get a working neural network using pytorch.
@@ -172,3 +174,26 @@ class NeuralNetwork(nn.Module):
     for key in metrics.keys():
       mean_metrics_scores[key] = sum(metrics_scores[key])/len(loader)
     return mean_metrics_scores, average_loss
+
+  def predict(self, loader:torch.utils.data.DataLoader, output_extraction_function:Callable, device:'str|torch.device|None' = None) -> list:
+    net = self
+    net.eval()
+    automatically_handle_gpu_memory = device == None
+    predictions = []
+    with torch.no_grad():
+        for _, data in enumerate(loader):
+          labels = data[1]
+          inputs = data[0]
+          if automatically_handle_gpu_memory:
+            inputs = self.__to(data[0], device)
+            labels = data[1].to(device)
+          outputs = net(inputs)
+          predictions += output_extraction_function(outputs)
+          if automatically_handle_gpu_memory:
+            self.__remove(inputs)
+            del labels
+            torch.cuda.empty_cache()
+
+    return predictions
+
+

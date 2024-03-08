@@ -139,7 +139,6 @@ def main():
     ### dataset creation
     
     tokenizer = get_tokenizer(bert_type)
-
     instances_and_model = [f"{problem_specification}\n\n{datapoint['instance']}" for datapoint in data]
 
     x = dict_lists_to_list_of_dicts(tokenizer(instances_and_model, padding=True, truncation=True, return_tensors='pt'))
@@ -147,6 +146,8 @@ def main():
     y = one_hot_encoding(y, combinations)
     
     train_dataloader, validation_dataloader, test_dataloader = get_dataloader(x, y, batch_size)
+    
+    ### training 
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("operating on device:", device)
@@ -156,7 +157,7 @@ def main():
     weights = weights.to(device)
 
     length = len(combinations)
-    model = Model(bert_type, length, dropout=.1)
+    model = Model(bert_type, length, dropout=.3)
     extraction_function = lambda x: torch.max(x, -1)[1].cpu()
     train_score, val_score = model.train_network(train_dataloader, 
                     validation_dataloader, 
@@ -174,6 +175,9 @@ def main():
                 val_score[key] = [float(v) for v in val_score[key]]
     f = open("stats.json", 'w')
     f.write(dumps({"train":train_score, "validation":val_score}))
+
+    ### testing
+
     print("evaluating on the training, validation and test set")
 
     model = model.to(device)
@@ -186,11 +190,11 @@ def main():
     len_val = len(validation_dataloader.dataset)
     len_test = len(test_dataloader.dataset)
 
-    times_matrix = get_time_matrix(np.array(y).shape, all_times)
+    times_matrix = get_time_matrix(np.array([y_tensor.tolist() for y_tensor in y]).shape, all_times)
     min_train = [min(times_matrix[i, :]) for i in range(len_train)]
     min_val = [min(times_matrix[i, :]) for i in range(len_train, len_train + len_val)]
     min_test = [min(times_matrix[i, :]) for i in range(len_train + len_val, len_train + len_val + len_test)]
-    
+
     pred_train = [times_matrix[i, train_prediction[i]] for i in range(len_train)]
     pred_val = [times_matrix[len_train + i, validation_prediction[i]] for i in range(len_val)]
     pred_test = [times_matrix[len_train + len_val + i, test_prediction[i]] for i in range(len_test)]
@@ -198,4 +202,5 @@ def main():
     print(f"train set:\nvb:{sum(min_train)}     pred:{sum(pred_train)}")
     print(f"validation set:\nvb:{sum(min_val)}     pred:{sum(pred_val)}")
     print(f"test set:\nvb:{sum(min_test)}     pred:{sum(pred_test)}")
+
 main()
