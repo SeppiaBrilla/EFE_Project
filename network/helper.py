@@ -80,16 +80,22 @@ def predict_dataloader(model, loader, device, extraction_function):
     all_predictions = []
     with torch.no_grad():
         for _, data in enumerate(loader):
-          labels = data[1]
           inputs = data[0]
           if True:
             inputs = to(data[0], device)
           outputs = model(inputs)
           predicted_classes = extraction_function(outputs)
-          all_predictions += predicted_classes
+          if isinstance(predicted_classes, dict):
+                if not isinstance(all_predictions, dict) :
+                    all_predictions = {}
+                for key in predicted_classes.keys():
+                    if not key in all_predictions:
+                        all_predictions[key] = []
+                    all_predictions[key] += predicted_classes[key]
+          else:
+              all_predictions += predicted_classes
           if True:
             remove(inputs)
-            del labels
             torch.cuda.empty_cache()
     return all_predictions
 

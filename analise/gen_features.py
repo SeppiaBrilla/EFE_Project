@@ -1,5 +1,8 @@
 from subprocess import run, PIPE, STDOUT
+from devtools import pprint
+from json import loads
 from re import compile
+from typing import Any
 from sys import argv
 import os
 
@@ -31,25 +34,56 @@ def call_fzn2feat(model_file):
     process = run(command, stdout=PIPE, stderr=STDOUT, check=True, encoding="UTF-8")
     return process.stdout
 
+def gen_features(eprime_file, param_file, file_name=None, save=True, verbose=True):
+    call_conjure(eprime_file, param_file)
+    generated_file = call_savilerow(eprime_file, "./temp.eprime-param")
+    res = call_fzn2feat(generated_file)
+    res = res.replace("'", '"')
+
+    if verbose:
+        pprint(loads(res))
+    if save:
+        file_name = file_name if file_name != None else f"{eprime_file.split('/')[-1]}_{param_file.split('/')[-1]}.json"
+        f = open(file_name, "w")
+        f.write(res)
+        f.close()
+    clean()
+
+def parse_args():
+    args: dict[str,Any] = {
+        "save":False,
+        "verbose": False
+    }
+    for i in range(1, len(argv)):
+        arg = argv[i]
+        if arg == "--save" or arg == "-s":
+            args["save"] = True
+        elif arg == "--name":
+            args["file_name"] = arg.replace("--name","")
+        elif arg == "--verbose" or arg == "-v":
+            args["verbose"] = True
+        elif not "eprime_file" in args:
+            args["eprime_file"] = arg
+        else:
+            args["param_file"] = arg
+    return args
+
 def main():
     if len(argv) < 2:
         print("error, please pass sthe necessary parameters. Use --help if needed")
         return
     if argv[1] == "--help" or argv[1] == "-h":
-        print("python gen_feature eprime_file param_file")
+        print("""python [options] gen_feature eprime_file param_file
+--save/-s       save the features as a file (default False)
+--file_name     personalize the saved file name
+--verbose/-v    print the results (default False)
+--help/-h       shows this message""")
         return
     if len(argv) < 3:
         print("error, please pass sthe necessary parameters. Use --help if needed")
         return
 
-    eprime_file, param_file = argv[1], argv[2]
-    call_conjure(eprime_file, param_file)
-    generated_file = call_savilerow(eprime_file, "./temp.eprime-param")
-    res = call_fzn2feat(generated_file)
-    f = open(f"{eprime_file.split('/')[-1]}_{param_file.split('/')[-1]}.json", "w")
-    f.write(res)
-    f.close()
-    clean()
-
+    args = parse_args()
+    gen_features(**args)
 if __name__ == "__main__":
     main()

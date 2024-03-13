@@ -3,7 +3,9 @@ import torch
 from typing import Any, Tuple, Callable
 from sys import stdout
 
-from torch.utils.data import dataloader
+class In_between_epochs:
+    def __call__(self, model:torch.nn.Module, loaders:dict[str,torch.utils.data.DataLoader], device:'torch.device|str', output_extraction_function:Callable) -> bool:
+      raise NotImplementedError("Subclass must implement abstract method")
 
 class NeuralNetwork(nn.Module):
   """
@@ -21,6 +23,7 @@ class NeuralNetwork(nn.Module):
             device:'torch.device|str'='cpu',
             output_extraction_function:Callable = lambda x: torch.round(x).detach().cpu(),
             metrics:dict[str,Callable] = {},
+            in_between_epochs:dict[str,In_between_epochs] = {},
             verbose:bool=False,
             automatically_handle_gpu_memory:bool = True) -> Tuple[dict[str,list[float]],dict[str,list[float]]]:
     """
@@ -71,9 +74,9 @@ class NeuralNetwork(nn.Module):
         for batch_idx, data in enumerate(train_loader):
             labels = data[1]
             inputs = data[0]
-            labels = data[1].to(device)
             if automatically_handle_gpu_memory:
-              inputs = self.__to(data[0], device)
+              inputs = self.__to(inputs, device)
+              labels = self.__to(labels, device)
             outputs = net(inputs)
             loss = loss_function(outputs, labels)
             loss.backward()
@@ -112,6 +115,22 @@ class NeuralNetwork(nn.Module):
           stdout.write(out_str)
           stdout.flush()
           print()
+
+        loaders = {"train": train_loader, "validation": validation_loader}
+        for in_between in in_between_epochs.keys():
+            result = in_between_epochs[in_between](self, loaders, device, output_extraction_function)
+
+            if not type(result) == bool:
+                raise Exception(f"in between {in_between} returned a non-boolean result: {result}")
+            elif result:
+                if verbose:
+                    print(f"stopping after {epochs} epochs because of in between {in_between}")
+
+                train_metrics_scores['loss'] = train_loss_history
+                val_metrics_scores['loss'] = val_loss_history
+                return train_metrics_scores, val_metrics_scores
+
+
     train_metrics_scores['loss'] = train_loss_history
     val_metrics_scores['loss'] = val_loss_history
 
@@ -154,8 +173,8 @@ class NeuralNetwork(nn.Module):
           labels = data[1]
           inputs = data[0]
           if automatically_handle_gpu_memory:
-            inputs = self.__to(data[0], device)
-            labels = data[1].to(device)
+            inputs = self.__to(inputs, device)
+            labels = self.__to(labels, device)
           outputs = net(inputs)
           loss = loss_function(outputs, labels)
           losses.append(loss)
