@@ -20,6 +20,7 @@ class NeuralNetwork(nn.Module):
             loss_function = nn.CrossEntropyLoss(),
             learning_rate:float=.1,
             epochs:int=10,
+            batch_size:'int|None' = None,
             device:'torch.device|str'='cpu',
             output_extraction_function:Callable = lambda x: torch.round(x).detach().cpu(),
             metrics:dict[str,Callable] = {},
@@ -69,6 +70,9 @@ class NeuralNetwork(nn.Module):
         train_metrics_scores[key] = []
         val_metrics_scores[key] = []
 
+    batch_size = train_loader.batch_size if batch_size is None else batch_size
+    predicted_classes = []
+    normal_labels = []
     for epoch in range(epochs):
         net.train()
         for batch_idx, data in enumerate(train_loader):
@@ -81,15 +85,19 @@ class NeuralNetwork(nn.Module):
             loss = loss_function(outputs, labels)
             loss.backward()
             optimizer.step()
-            optimizer.zero_grad()
-            predicted_classes = output_extraction_function(outputs)
-            normal_labels = output_extraction_function(labels)
-            if verbose:
-              loss_str = "{:10.3f}".format(loss.cpu())
-              str_metrics = {key: "{:10.3f}".format(metrics[key](normal_labels, predicted_classes)) for key in metrics.keys()}
-              str_batch = str(batch_idx + 1)
-              stdout.write(f"\rbatch {str_batch}/{total_batch} ----- loss: {loss_str} ----- {' ----- '.join([f'{key}: {str_metrics[key]}' for key in str_metrics.keys()])}")
-              stdout.flush()
+            predicted_classes += output_extraction_function(outputs)
+            normal_labels += output_extraction_function(labels)
+            batch = batch_idx * train_loader.batch_size
+            if batch % batch_size == 0 or (batch_idx + 1) == total_batch:
+              optimizer.zero_grad()
+              if verbose:
+                loss_str = "{:10.3f}".format(loss.cpu())
+                str_metrics = {key: "{:10.3f}".format(metrics[key](normal_labels, predicted_classes)) for key in metrics.keys()}
+                str_batch = str(batch_idx + 1)
+                stdout.write(f"\rbatch {str_batch}/{total_batch} ----- loss: {loss_str} ----- {' ----- '.join([f'{key}: {str_metrics[key]}' for key in str_metrics.keys()])}")
+                stdout.flush()
+              predicted_classes = []
+              normal_labels = []
             if automatically_handle_gpu_memory:
               self.__remove(inputs)
               del labels
@@ -160,6 +168,7 @@ class NeuralNetwork(nn.Module):
         self.__remove(d)
     else:
       del data
+
 
   def __validate(self, loader, metrics, loss_function, device, output_extraction_function, automatically_handle_gpu_memory):
     losses = []
