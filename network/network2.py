@@ -1,8 +1,8 @@
 from transformers import BertTokenizer, BertModel, RobertaTokenizer, RobertaModel, LongformerModel, LongformerTokenizer, AutoTokenizer, AutoModel
-from random import shuffle
+from random import randint
 import torch.nn as nn
 import torch
-from json import loads, dumps
+from json import loads
 import numpy as np
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
@@ -10,6 +10,7 @@ from neuralNetwork import NeuralNetwork, In_between_epochs
 from helper import Dataset, dict_lists_to_list_of_dicts, one_hot_encoding, predict_dataloader
 from typing import Tuple, Callable
 from sys import argv
+
 
 class Model(NeuralNetwork):
     def __init__(self, base_model_name:str, num_classes:int, dropout:float = .5) -> None:
@@ -19,17 +20,18 @@ class Model(NeuralNetwork):
         elif "bert-base-uncased" == base_model_name:
             self.bert = BertModel.from_pretrained(base_model_name)
         elif "allenai/longformer-base-4096" == base_model_name:
-            self.bert = LongformerModel.from_pretrained(base_model_name)
+            self.bert = LongformerModel.from_pretrained(pretrained_model_name_or_path = base_model_name)
         elif "microsoft/codebert-base" == base_model_name:
-            self.bert = AutoModel.from_pretrained(base_model_name)
+            self.bert = AutoModel.from_pretrained("microsoft/codebert-base")
         else:
-            raise Exception("bert type unrecognised")
+            self.bert = AutoModel.from_pretrained(base_model_name)
         self.dropout = nn.Dropout(dropout)
 
-        self.middle_layer = nn.Linear(self.bert.config.hidden_size, num_classes)
+        self.middle_layer = nn.Linear(self.bert.config.hidden_size, 100)
 
-        self.output_layer_class = nn.Linear(num_classes, num_classes)
+        self.output_layer_class = nn.Linear(100, num_classes)
         self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, inputs):
         _, encoded_input = self.bert(**inputs, return_dict = False)
@@ -40,7 +42,7 @@ class Model(NeuralNetwork):
     
 class Evaluate_time(In_between_epochs):
 
-    def __init__(self, len_train, len_val, len_test, min_train, min_validation, min_test, maj_train, maj_validation, maj_test, sb_train, sb_validation, sb_test, test_dataloader, times_matrix) -> None:
+    def __init__(self, len_train, len_val, len_test, min_train, min_validation, min_test, maj_train, maj_validation, maj_test, sb_train, sb_validation, sb_test, test_dataloader, train_dataloader, times_matrix) -> None:
         self.len_train = len_train
         self.len_val = len_val
         self.len_test = len_test
@@ -55,18 +57,19 @@ class Evaluate_time(In_between_epochs):
         self.sb_test = sb_test
         self.test_dataloader = test_dataloader
         self.times_matrix = times_matrix
+        self.train_dataloader = train_dataloader 
         
     def __call__(self, model: torch.nn.Module, loaders: dict[str, torch.utils.data.DataLoader], device: 'torch.device|str', output_extraction_function:Callable) -> bool:
-        train_prediction = predict_dataloader(model, loaders["train"], device, output_extraction_function)
+        train_prediction = predict_dataloader(model, self.train_dataloader, device, output_extraction_function)
         validation_prediction = predict_dataloader(model, loaders["validation"], device, output_extraction_function)
         test_prediction = predict_dataloader(model, self.test_dataloader, device, output_extraction_function)
         pred_train = [self.times_matrix[i, train_prediction[i]] for i in range(self.len_train)]
         pred_val = [self.times_matrix[self.len_train + i, validation_prediction[i]] for i in range(self.len_val)]
         pred_test = [self.times_matrix[self.len_train + self.len_val + i, test_prediction[i]] for i in range(self.len_test)]
 
-        print(f"train set:\nvb:{self.vb_train}     pred:{sum(pred_train)}      sb:{self.maj_train}        smallest:{self.sb_train}")
-        print(f"validation set:\nvb:{self.vb_validation}     pred:{sum(pred_val)}     sb:{self.maj_validation}        smallest:{self.sb_validation}")
-        print(f"test set:\nvb:{self.vb_test}     pred:{sum(pred_test)}     sb:{self.maj_test}        smallest:{self.sb_test}")
+        print(f"train set:\nvb:{self.vb_train}     pred:{sum(pred_train)}      sb:{self.maj_train}        smallest:{self.sb_train}. Unique values: {np.unique(train_prediction)}")
+        print(f"validation set:\nvb:{self.vb_validation}     pred:{sum(pred_val)}     sb:{self.maj_validation}        smallest:{self.sb_validation}. Unique values: {np.unique(validation_prediction)}")
+        print(f"test set:\nvb:{self.vb_test}     pred:{sum(pred_test)}     sb:{self.maj_test}        smallest:{self.sb_test}. Unique values: {np.unique(test_prediction)}")
         return False
       
 
@@ -77,10 +80,8 @@ def get_tokenizer(bert_type:str):
         return BertTokenizer.from_pretrained(bert_type)
     elif "allenai/longformer-base-4096" == bert_type:
         return LongformerTokenizer.from_pretrained(bert_type)
-    elif "microsoft/codebert-base" == bert_type:
-        return AutoTokenizer.from_pretrained(bert_type)
     else:
-        raise Exception("bert type unrecognised")
+        return AutoTokenizer.from_pretrained(bert_type)
     
 def get_time_matrix(shape:tuple, times:list[list[dict]]):
     time_matrix = np.zeros(shape)
@@ -90,48 +91,45 @@ def get_time_matrix(shape:tuple, times:list[list[dict]]):
             time_matrix[i,j] = times_i[j]["time"]
     return time_matrix
 
-def get_dataloader(x, y, batch_size) -> Tuple[DataLoader, DataLoader, DataLoader]:
+def get_dataloader(x, y, batch_size, test_buckets = []) -> Tuple[DataLoader, DataLoader, DataLoader]:
     BUCKETS = 10
 
     N_ELEMENTS = len(x)
 
     BUCKET_SIZE = N_ELEMENTS // BUCKETS
 
-    TRAIN_VALIDATION_BUCKETS = 9
     TEST_BUCKETS = 1
 
-    TRAIN_SIZE = int((TRAIN_VALIDATION_BUCKETS / 10) * 9)
-    VALIDATION_SIZE = TRAIN_VALIDATION_BUCKETS - TRAIN_SIZE
 
-    buckets_x = [x[bucket * BUCKET_SIZE: (bucket + 1) * BUCKET_SIZE] for bucket in range(BUCKETS)]
-    buckets_y = [y[bucket * BUCKET_SIZE: (bucket + 1) * BUCKET_SIZE] for bucket in range(BUCKETS)]
-
-    x_train_validation = buckets_x[:TRAIN_VALIDATION_BUCKETS]
-    y_train_validation = buckets_y[:TRAIN_VALIDATION_BUCKETS]
-
-
-    x_train = np.ravel(x_train_validation[:TRAIN_SIZE]) 
-    y_train = y_train_validation[0]
-    for i in range(1, TRAIN_SIZE):
-        y_train += y_train_validation[i]
-    x_validation  = np.ravel(x_train_validation[TRAIN_SIZE:TRAIN_SIZE + VALIDATION_SIZE])
-    y_validation = y_train_validation[TRAIN_SIZE]
-    for i in range(TRAIN_SIZE + 1, TRAIN_SIZE + VALIDATION_SIZE):
-        y_validation += y_train_validation[i]
-
-    x_test = np.ravel(buckets_x[-TEST_BUCKETS:])
-    y_test = buckets_y[-TEST_BUCKETS]
-    for i in range((BUCKETS - TEST_BUCKETS) + 1, BUCKETS):
-        y_test += buckets_y[i]
-
-    train_dataset = Dataset(x_train, y_train)
-    validation_dataset = Dataset(x_validation, y_validation)
-    test_dataset = Dataset(x_test, y_test)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    validation_dataloader = DataLoader(validation_dataset, batch_size=batch_size)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
+    x_local = x.copy()
+    y_local = y.copy()
+    x_test, y_test = [], []
     
-    return train_dataloader, validation_dataloader, test_dataloader
+    if len(test_buckets) == 0: 
+        for _ in range(TEST_BUCKETS):
+            idx = randint(0, BUCKETS)
+            while idx in test_buckets:
+                idx = randint(0, BUCKETS)
+            test_buckets.append(idx)
+
+    for bucket in test_buckets:
+        idx = bucket * BUCKET_SIZE
+        for _ in range(BUCKET_SIZE):
+            x_test.append(x_local.pop(idx))
+            y_test.append(y_local.pop(idx))
+
+    train_elements = (len(y_local) // 10) * 9
+    x_train = x_local[:train_elements]
+    y_train = y_local[:train_elements]
+
+    x_validation = x_local[train_elements:]
+    y_validation = y_local[train_elements:]
+
+    train_dataset, val_dataset, test_dataset = Dataset(x_train, y_train), Dataset(x_validation, y_validation), Dataset(x_test, y_test)
+    
+    return (DataLoader(train_dataset, batch_size=batch_size, shuffle=True), 
+            DataLoader(val_dataset, batch_size=batch_size), 
+            DataLoader(test_dataset, batch_size=batch_size)) 
 
 def get_weights(unique_combinations:list, all_combinations:list) -> torch.Tensor:
 
@@ -143,30 +141,13 @@ def get_weights(unique_combinations:list, all_combinations:list) -> torch.Tensor
     weights = torch.Tensor(weights)
     return weights
 
-class Loss:
-
-
-    def __init__(self) -> None:
-        self.bce = nn.BCELoss()
-        self.crossEntropy = nn.CrossEntropyLoss()
-        self.mse_value = 0
-        self.cross_value = 0
-
-    def __call__(self, x, y):
-        y_times, y_class = y["times"], y["class"]
-        x_times, x_class = x["times"], x["class"]
-
-        self.mse_value = self.bce(x_times, y_times)
-        self.cross_value = self.crossEntropy(x_class, y_class)
-
-        return self.mse_value + self.cross_value / 2
         
 def main():
     if argv[1] == '--help':
-        print("network.py dataset model_specifications batch_size bert_type epochs")
+        print("network.py dataset batch_size bert_type tokenizer_type epochs")
         print("bert types: \n[1]FacebookAI/roberta-base \n[2]bert-base-uncased \n[3]allenai/longformer-base-4096 \n[4]microsoft/codebert-base")
         return
-    dataset, model_specifications, batch_size, bert_type, epochs = argv[1], argv[2], int(argv[3]), argv[4], int(argv[5])
+    dataset, batch_size, bert_type, tokenizer_type, epochs = argv[1], int(argv[2]), argv[3], argv[4], int(argv[5])
 
     if bert_type == "1":
         bert_type = "FacebookAI/roberta-base"
@@ -184,20 +165,11 @@ def main():
 
     ### import the model specification
 
-    f = open(model_specifications)
-    problem_specification = f.read()
-    f.close()
-
-    ### data manipulation
-
-    shuffle(data)
     all_times = [datapoint["all_times"] for datapoint in data]
     combinations = [d["combination"] for d in data[0]["all_times"]]
-    
-    ### dataset creation
-    
-    tokenizer = get_tokenizer(bert_type)
-    instances_and_model = [f"{problem_specification}\n\n{datapoint['instance']}" for datapoint in data]
+    instances_and_model = [d["instance_value"] for d in data]
+
+    tokenizer = get_tokenizer(tokenizer_type)
 
     x = dict_lists_to_list_of_dicts(tokenizer(instances_and_model, padding=True, truncation=True, return_tensors='pt'))
     y_times = get_time_matrix((len(all_times), len(combinations)), all_times)
@@ -208,9 +180,18 @@ def main():
     y_times = [ torch.from_numpy(y_times[i, :]).type(torch.float32) for i in range(y_times.shape[0])]
     y_class = [datapoint["combination"] for datapoint in data]
     y_class = one_hot_encoding(y_class, combinations)
-    
-    y = y_class #[{"class":y_class[i], "times":y_times[i]} for i in range(len(y_times))]
 
+    y_times = get_time_matrix((len(all_times), len(combinations)), all_times)
+    for i in range(y_times.shape[0]):
+        t_max = np.max(y_times[i,:])
+        t_min = np.min(y_times[i,:])
+        for j in range(y_times.shape[1]):
+            y_times[i,j] = t_max - y_times[i,j] / t_min
+    y_times = [ torch.from_numpy(y_times[i, :]).type(torch.float32) for i in range(y_times.shape[0])]
+    softmax = nn.Softmax(dim=0)
+    y_times = [ softmax(y_t) for y_t in y_times]
+
+    y = y_class
     train_dataloader, validation_dataloader, test_dataloader = get_dataloader(x, y, batch_size)
     
     ### training 
@@ -252,11 +233,12 @@ def main():
         sum(min_train), sum(min_val), sum(min_test), 
         sum(majority_train), sum(majority_val), sum(majority_test), 
         sb_train, sb_validation, sb_test, 
-        test_dataloader, times_matrix)
+        test_dataloader, DataLoader(train_dataloader.dataset, train_dataloader.batch_size, shuffle=False), times_matrix)
 
     length = len(combinations)
     model = Model(bert_type, length, dropout=.3)
     extraction_function = lambda x: torch.max(x, -1)[1].cpu()
+
     train_score, val_score = model.train_network(train_dataloader, 
                     validation_dataloader, 
                     torch.optim.SGD, 
